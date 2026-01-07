@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: lichcongtac-admin-api
+    env: node
+    plan: free
+    region: singapore
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /health
+    buildCommand: "npm ci --omit=dev || npm install --omit=dev"
+    startCommand: "npm start"
+    # Nếu mã nguồn không ở thư mục gốc, thêm dòng sau, ví dụ:
+    # rootDir: api
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Thêm biến môi trường khác nếu cần:
+      # - key: JWT_SECRET
+      #   value: your-secret
