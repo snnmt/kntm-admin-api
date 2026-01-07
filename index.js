@@ -1,5 +1,5 @@
 // index.js
-// Admin API cho Lịch Công Tác – Node/Express + Firebase Admin
+// Admin API cho KNTM – Node/Express + Firebase Admin
 
 const express = require("express");
 const cors = require("cors");
@@ -52,7 +52,7 @@ async function isTargetSuperadmin(uid) {
 
 // Ping/wake
 app.get("/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/", (_req, res) => res.json({ service: "lichcongtac-admin-api", ok: true }));
+app.get("/", (_req, res) => res.json({ service: "kntm-admin-api", ok: true }));
 
 // Xác thực bằng Firebase ID token
 async function authMiddleware(req, res, next) {
