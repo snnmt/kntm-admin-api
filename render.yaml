@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: lichcongtac-admin-api
+    name: kntm-admin-api
     env: node
     plan: free
     region: singapore
