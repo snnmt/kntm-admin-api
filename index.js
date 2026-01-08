@@ -1,4 +1,3 @@
-// index.js
 // Admin API cho KNTM – Node/Express + Firebase Admin
 
 const express = require("express");
@@ -33,14 +32,12 @@ const SUPER_ADMIN_EMAILS = (process.env.SUPER_ADMINS || "")
 const isSuperEmail = (email) => SUPER_ADMIN_EMAILS.includes((email || "").toLowerCase());
 
 async function isTargetSuperadmin(uid) {
-  // Lấy email từ Firebase Auth
   let email = "";
   try {
     const u = await auth.getUser(uid);
     email = (u.email || "").toLowerCase();
   } catch (_) {}
 
-  // Lấy role từ Firestore (nếu có)
   let role = "";
   try {
     const snap = await db.collection("users").doc(uid).get();
@@ -84,7 +81,6 @@ async function requireAdmin(req, res, next) {
 
     if (!isAdmin) return res.status(403).json({ error: "forbidden" });
 
-    // gắn thông tin lên req
     req.me = {
       ...profile,
       role,
@@ -107,6 +103,10 @@ async function adminHandler(req, res) {
   console.log("[ADMIN]", { action, by: req.user?.email, dataKeys: Object.keys(data) });
 
   try {
+    // ============================================================
+    // 1. USER MANAGEMENT (CREATE, UPDATE, RESET, DELETE)
+    // ============================================================
+
     // ---------- CREATE USER ----------
     if (action === "createUser") {
       const { email, password, fullName, role, orgId, departmentId } = data || {};
@@ -114,7 +114,7 @@ async function adminHandler(req, res) {
         return res.status(400).json({ error: "missing fields" });
       }
 
-      // admin chỉ được tạo trong org của mình và KHÔNG được tạo superadmin/hoặc email thuộc SUPER_ADMIN_EMAILS
+      // Admin thường chỉ tạo trong Org của mình
       if (!req.me.isSuper) {
         if (!req.me.orgId || orgId !== req.me.orgId) {
           return res.status(403).json({ error: "admin can only create in own org" });
@@ -150,12 +150,10 @@ async function adminHandler(req, res) {
       const { uid, ...rest } = data || {};
       if (!uid) return res.status(400).json({ error: "missing uid" });
 
-      // admin không được sửa superadmin
       if (!req.me.isSuper && await isTargetSuperadmin(uid)) {
         return res.status(403).json({ error: "cannot modify superadmin" });
       }
 
-      // admin không được promote thành superadmin hoặc đổi email thành email superadmin
       if (!req.me.isSuper) {
         if (rest.role && String(rest.role).toLowerCase() === "superadmin") {
           return res.status(403).json({ error: "cannot promote to superadmin" });
@@ -163,11 +161,8 @@ async function adminHandler(req, res) {
         if (rest.email && isSuperEmail(rest.email)) {
           return res.status(403).json({ error: "cannot set email of superadmin" });
         }
-      }
-
-      // Giới hạn org khi admin cập nhật
-      if (!req.me.isSuper && rest.orgId) {
-        if (!req.me.orgId || rest.orgId !== req.me.orgId) {
+        // Giới hạn chuyển Org
+        if (rest.orgId && (!req.me.orgId || rest.orgId !== req.me.orgId)) {
           return res.status(403).json({ error: "admin can only move within own org" });
         }
       }
@@ -188,12 +183,10 @@ async function adminHandler(req, res) {
       const pwd = password || newPassword;
       if (!uid || !pwd) return res.status(400).json({ error: "missing uid/password" });
 
-      // admin không được đổi mật khẩu superadmin
       if (!req.me.isSuper && await isTargetSuperadmin(uid)) {
         return res.status(403).json({ error: "cannot change password of superadmin" });
       }
 
-      // Nếu là admin thường thì chỉ reset trong org của mình và chỉ khi có profile
       if (!req.me.isSuper) {
         const targetSnap = await db.collection("users").doc(uid).get();
         if (!targetSnap.exists) {
@@ -209,11 +202,7 @@ async function adminHandler(req, res) {
         await auth.updateUser(uid, { password: pwd });
         return res.json({ ok: true });
       } catch (e) {
-        const msg = String(e?.message || e);
-        if (msg.includes("auth/user-not-found")) {
-          return res.status(404).json({ error: "auth user not found" });
-        }
-        return res.status(500).json({ error: "updateUser failed", details: msg });
+        return res.status(500).json({ error: "updateUser failed", details: String(e.message) });
       }
     }
 
@@ -222,7 +211,6 @@ async function adminHandler(req, res) {
       const { uid, cascade } = data || {};
       if (!uid) return res.status(400).json({ error: "missing uid" });
 
-      // admin không được xoá superadmin
       if (!req.me.isSuper && await isTargetSuperadmin(uid)) {
         return res.status(403).json({ error: "cannot delete superadmin" });
       }
@@ -239,8 +227,89 @@ async function adminHandler(req, res) {
       return res.json({ ok: true });
     }
 
-    // ---------- Unknown ----------
-    return res.status(400).json({ error: "unknown action" });
+    // ============================================================
+    // 2. ORGANIZATION MANAGEMENT (MỚI BỔ SUNG)
+    // ============================================================
+
+    // ---------- CREATE ORGANIZATION ----------
+    if (action === "createOrganization") {
+      if (!req.me.isSuper) return res.status(403).json({ error: "only superadmin" });
+
+      const { id, name, code, status } = data || {};
+      if (!id || !name) return res.status(400).json({ error: "missing id/name" });
+
+      await db.collection("organizations").doc(id).set({
+        id,
+        name,
+        code: code || "",
+        status: status || "active",
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      return res.json({ ok: true, id });
+    }
+
+    // ---------- DELETE ORGANIZATION ----------
+    if (action === "deleteOrganization") {
+      if (!req.me.isSuper) return res.status(403).json({ error: "only superadmin" });
+      const { id } = data || {};
+      if (!id) return res.status(400).json({ error: "missing id" });
+
+      // Có thể thêm logic check có user/dept nào thuộc org này không để chặn xóa
+      await db.collection("organizations").doc(id).delete();
+      return res.json({ ok: true });
+    }
+
+    // ============================================================
+    // 3. DEPARTMENT MANAGEMENT (MỚI BỔ SUNG)
+    // ============================================================
+
+    // ---------- CREATE DEPARTMENT ----------
+    if (action === "createDepartment") {
+      const { id, name, orgId } = data || {};
+      if (!id || !name || !orgId) return res.status(400).json({ error: "missing fields" });
+
+      // SuperAdmin: Tạo đâu cũng được
+      // Admin: Chỉ được tạo cho Org của mình
+      if (!req.me.isSuper) {
+        if (!req.me.orgId || orgId !== req.me.orgId) {
+          return res.status(403).json({ error: "admin can only create dept in own org" });
+        }
+      }
+
+      await db.collection("departments").doc(id).set({
+        id,
+        name,
+        orgId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      return res.json({ ok: true, id });
+    }
+
+    // ---------- DELETE DEPARTMENT ----------
+    if (action === "deleteDepartment") {
+      const { id } = data || {};
+      if (!id) return res.status(400).json({ error: "missing id" });
+
+      // Check quyền admin thường
+      if (!req.me.isSuper) {
+        const deptSnap = await db.collection("departments").doc(id).get();
+        if (deptSnap.exists) {
+          const deptData = deptSnap.data();
+          if (!req.me.orgId || deptData.orgId !== req.me.orgId) {
+            return res.status(403).json({ error: "admin can only delete dept in own org" });
+          }
+        }
+      }
+
+      await db.collection("departments").doc(id).delete();
+      return res.json({ ok: true });
+    }
+
+    // ---------- UNKNOWN ACTION ----------
+    return res.status(400).json({ error: "unknown action: " + action });
+
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: "server error", details: String(e?.message || e) });
