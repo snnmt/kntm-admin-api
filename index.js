@@ -307,6 +307,56 @@ async function adminHandler(req, res) {
       return res.json({ ok: true });
     }
 
+
+// ... (Các đoạn code quản lý user, organization, department ở trên giữ nguyên) ...
+
+    // ============================================================
+    // 4. NOTIFICATION MANAGEMENT (MỚI THÊM VÀO ĐÂY)
+    // ============================================================
+
+    // ---------- SEND NOTIFICATION (DATA-ONLY) ----------
+    if (action === "sendNotification") {
+      const { title, body, targetType, targetValue } = data || {};
+
+      // 1. Validate dữ liệu
+      if (!title || !body) {
+        return res.status(400).json({ error: "Missing title or body" });
+      }
+
+      // 2. Xác định Topic nhận tin
+      let topic = "ALL";
+      if (targetType === "ORG") topic = `ORG_${targetValue}`;
+      else if (targetType === "USER") topic = `USER_${targetValue}`;
+
+      // 3. Cấu trúc tin nhắn DATA-ONLY (Quan trọng: KHÔNG có key "notification")
+      const message = {
+        topic: topic,
+        android: {
+          priority: "high", // Đánh thức máy kể cả khi tắt màn hình
+          ttl: 3600 * 1000 // Thời gian sống của tin nhắn (1 giờ)
+        },
+        data: {
+          title: title,
+          body: body,
+          targetType: targetType || "ALL",
+          targetValue: targetValue || "",
+          click_action: "OPEN_MAIN_ACTIVITY", // Action để Android bắt được
+          docId: String(Date.now()) // ID giả để App không bị crash nếu cần ID
+        }
+      };
+
+      console.log(`[Notification] Sending to topic: ${topic}`);
+
+      // 4. Gửi tin bằng Admin SDK
+      const response = await admin.messaging().send(message);
+      console.log("[Notification] Success:", response);
+      
+      return res.json({ success: true, messageId: response });
+    }
+
+    // ---------- UNKNOWN ACTION ----------
+    // return res.status(400).json({ error: "unknown action: " + action });
+    
     // ---------- UNKNOWN ACTION ----------
     return res.status(400).json({ error: "unknown action: " + action });
 
