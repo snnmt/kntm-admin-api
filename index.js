@@ -1,4 +1,4 @@
-// Admin API cho KNTM – Node/Express + Firebase Admin
+// Admin API cho KNTM AI – Node/Express + Firebase Admin
 
 const express = require("express");
 const cors = require("cors");
@@ -96,17 +96,19 @@ async function requireAdmin(req, res, next) {
 
 app.get("/health", authMiddleware, (_req, res) => res.json({ ok: true }));
 
-// ====== Core handler dùng cho /admin và /admin/:action ======
+// ====== Core handler ======
 async function adminHandler(req, res) {
+  // Lấy action từ URL hoặc Body
   const action = (req.params.action || req.body?.action || req.query?.action || "").trim();
-  const data = req.body?.data || {};
-  console.log("[ADMIN]", { action, by: req.user?.email, dataKeys: Object.keys(data) });
+  const data = req.body?.data || {}; // Lấy dữ liệu từ key "data"
+  
+  console.log("[ADMIN]", { action, by: req.user?.email });
 
   try {
     // ============================================================
-    // 1. USER MANAGEMENT (CREATE, UPDATE, RESET, DELETE)
+    // 1. QUẢN LÝ USER (CREATE, UPDATE,...)
     // ============================================================
-
+    
     // ---------- CREATE USER ----------
     if (action === "createUser") {
       const { email, password, fullName, role, orgId, departmentId } = data || {};
@@ -114,7 +116,6 @@ async function adminHandler(req, res) {
         return res.status(400).json({ error: "missing fields" });
       }
 
-      // Admin thường chỉ tạo trong Org của mình
       if (!req.me.isSuper) {
         if (!req.me.orgId || orgId !== req.me.orgId) {
           return res.status(403).json({ error: "admin can only create in own org" });
@@ -161,7 +162,6 @@ async function adminHandler(req, res) {
         if (rest.email && isSuperEmail(rest.email)) {
           return res.status(403).json({ error: "cannot set email of superadmin" });
         }
-        // Giới hạn chuyển Org
         if (rest.orgId && (!req.me.orgId || rest.orgId !== req.me.orgId)) {
           return res.status(403).json({ error: "admin can only move within own org" });
         }
@@ -175,35 +175,6 @@ async function adminHandler(req, res) {
         if (Object.keys(updates).length) await auth.updateUser(uid, updates);
       } catch (_) {}
       return res.json({ ok: true });
-    }
-
-    // ---------- RESET/SET PASSWORD ----------
-    if (["setPassword", "resetPassword", "adminResetPassword"].includes(action)) {
-      const { uid, password, newPassword } = data || {};
-      const pwd = password || newPassword;
-      if (!uid || !pwd) return res.status(400).json({ error: "missing uid/password" });
-
-      if (!req.me.isSuper && await isTargetSuperadmin(uid)) {
-        return res.status(403).json({ error: "cannot change password of superadmin" });
-      }
-
-      if (!req.me.isSuper) {
-        const targetSnap = await db.collection("users").doc(uid).get();
-        if (!targetSnap.exists) {
-          return res.status(403).json({ error: "only superadmin can reset users without profile" });
-        }
-        const target = targetSnap.data() || {};
-        if (!req.me.orgId || target.orgId !== req.me.orgId) {
-          return res.status(403).json({ error: "admin can only reset password within own org" });
-        }
-      }
-
-      try {
-        await auth.updateUser(uid, { password: pwd });
-        return res.json({ ok: true });
-      } catch (e) {
-        return res.status(500).json({ error: "updateUser failed", details: String(e.message) });
-      }
     }
 
     // ---------- DELETE USER ----------
@@ -228,93 +199,12 @@ async function adminHandler(req, res) {
     }
 
     // ============================================================
-    // 2. ORGANIZATION MANAGEMENT (MỚI BỔ SUNG)
+    // 2. GỬI THÔNG BÁO (PHẦN BẠN ĐANG THIẾU)
     // ============================================================
-
-    // ---------- CREATE ORGANIZATION ----------
-    if (action === "createOrganization") {
-      if (!req.me.isSuper) return res.status(403).json({ error: "only superadmin" });
-
-      const { id, name, code, status } = data || {};
-      if (!id || !name) return res.status(400).json({ error: "missing id/name" });
-
-      await db.collection("organizations").doc(id).set({
-        id,
-        name,
-        code: code || "",
-        status: status || "active",
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-
-      return res.json({ ok: true, id });
-    }
-
-    // ---------- DELETE ORGANIZATION ----------
-    if (action === "deleteOrganization") {
-      if (!req.me.isSuper) return res.status(403).json({ error: "only superadmin" });
-      const { id } = data || {};
-      if (!id) return res.status(400).json({ error: "missing id" });
-
-      // Có thể thêm logic check có user/dept nào thuộc org này không để chặn xóa
-      await db.collection("organizations").doc(id).delete();
-      return res.json({ ok: true });
-    }
-
-    // ============================================================
-    // 3. DEPARTMENT MANAGEMENT (MỚI BỔ SUNG)
-    // ============================================================
-
-    // ---------- CREATE DEPARTMENT ----------
-    if (action === "createDepartment") {
-      const { id, name, orgId } = data || {};
-      if (!id || !name || !orgId) return res.status(400).json({ error: "missing fields" });
-
-      // SuperAdmin: Tạo đâu cũng được
-      // Admin: Chỉ được tạo cho Org của mình
-      if (!req.me.isSuper) {
-        if (!req.me.orgId || orgId !== req.me.orgId) {
-          return res.status(403).json({ error: "admin can only create dept in own org" });
-        }
-      }
-
-      await db.collection("departments").doc(id).set({
-        id,
-        name,
-        orgId,
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-
-      return res.json({ ok: true, id });
-    }
-
-    // ---------- DELETE DEPARTMENT ----------
-    if (action === "deleteDepartment") {
-      const { id } = data || {};
-      if (!id) return res.status(400).json({ error: "missing id" });
-
-      // Check quyền admin thường
-      if (!req.me.isSuper) {
-        const deptSnap = await db.collection("departments").doc(id).get();
-        if (deptSnap.exists) {
-          const deptData = deptSnap.data();
-          if (!req.me.orgId || deptData.orgId !== req.me.orgId) {
-            return res.status(403).json({ error: "admin can only delete dept in own org" });
-          }
-        }
-      }
-
-      await db.collection("departments").doc(id).delete();
-      return res.json({ ok: true });
-    }
-
-
-// ... (Các đoạn code quản lý user, organization, department ở trên giữ nguyên) ...
-    // ============================================================
-    // 4. NOTIFICATION MANAGEMENT (ADD THIS BLOCK)
-    // ============================================================
-
-    // ---------- SEND NOTIFICATION (DATA-ONLY) ----------
-    if (action === "sendNotification") {  // <--- This string MUST match exactly
+    
+    // ---------- SEND NOTIFICATION ----------
+    // Đây là đoạn code QUAN TRỌNG để sửa lỗi 400
+    if (action === "sendNotification") {
       const { title, body, targetType, targetValue } = data || {};
 
       if (!title || !body) {
@@ -327,7 +217,7 @@ async function adminHandler(req, res) {
 
       const message = {
         topic: topic,
-        android: { priority: "high" },
+        // Dùng DATA MESSAGE để App tự xử lý hiển thị (ổn định hơn)
         data: {
           title: title,
           body: body,
@@ -335,19 +225,20 @@ async function adminHandler(req, res) {
           targetValue: targetValue || "",
           click_action: "OPEN_MAIN_ACTIVITY",
           docId: String(Date.now())
+        },
+        android: {
+          priority: "high",
+          ttl: 3600 * 1000 // 1 giờ
         }
       };
 
       console.log(`[Notification] Sending to topic: ${topic}`);
       const response = await admin.messaging().send(message);
+      console.log("[Notification] Success:", response);
+      
       return res.json({ success: true, messageId: response });
     }
 
-    // ---------- UNKNOWN ACTION (This must be AT THE END) ----------
-    return res.status(400).json({ error: "unknown action: " + action }); // <--- This line is throwing your error
-
-// ... end of adminHandler ...
-    
     // ---------- UNKNOWN ACTION ----------
     return res.status(400).json({ error: "unknown action: " + action });
 
@@ -361,7 +252,7 @@ async function adminHandler(req, res) {
 app.post("/admin", authMiddleware, requireAdmin, adminHandler);
 app.post("/admin/:action", authMiddleware, requireAdmin, adminHandler);
 
-// Kéo dài timeout tránh cold-start cắt sớm (Render free plan)
+// Kéo dài timeout
 const server = app.listen(process.env.PORT || 3000, () => {
   console.log("Admin API listening on", server.address().port);
 });
