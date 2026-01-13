@@ -217,6 +217,11 @@ async function adminHandler(req, res) {
 
       const message = {
         topic: topic,
+        // CẤU HÌNH QUAN TRỌNG ĐỂ KHÔNG BỊ CHẬM
+        android: {
+          priority: "high", // Bắt buộc có dòng này để đánh thức máy ngay lập tức
+          ttl: 0 // (Time To Live) Số 0 nghĩa là "gửi ngay lập tức hoặc hủy", giúp đẩy nhanh tốc độ
+        },
         // Dùng DATA MESSAGE để App tự xử lý hiển thị (ổn định hơn)
         data: {
           title: title,
